@@ -22,17 +22,16 @@ def processLine(line, keys, values):
 
     key = tuple()
 
-    value = tuple()
-
     for i in range(len(columns)):
 
         if i in keys:
             key += tuple([columns[i]])
         
         if i in values:
-            value += tuple([columns[i]])
+            value = int(columns[i])
+            
 
-    return (key, [value])
+    return ( key, (1,value) )
 
 with open('result.txt', 'w') as f:
 
@@ -42,9 +41,9 @@ with open('result.txt', 'w') as f:
 
     headerList = sc.broadcast(headerList)
 
-    keys = ['state', 'county', 'yearday']
+    keys = ['state', 'county', 'yearday','attribute']
 
-    values = ['attribute', 'value']
+    values = ['value']
 
     keyOrdinals = []
 
@@ -63,6 +62,45 @@ with open('result.txt', 'w') as f:
     
     climateRDD = climateRDD.map(lambda line: processLine(line, keyOrdinals, valueOrdinals))
 
-    climateRDD = climateRDD.reduceByKey(lambda a,b: a+b)
+    def emitCountyKeys(row):
+        date, attribute, county, state = row[0]
+        count, s = row[1]
+
+        avgForDay = round(s / count, 1)
+
+        keyTuple = (county, state, attribute)
+        valueTuple = ( [(date, avgForDay)] , (count, s) )
+
+        return (keyTuple, valueTuple)
     
-    pprint(climateRDD.collect(), f)
+    def emitMeanCenteredValues(row):
+        county, state, attribute = row[0]
+        listDatesValues = row[1][0]
+        count,s = row[1][1]
+
+        avgForAttribute = round(s/count , 1)
+
+        finalEmitList = []
+
+        for dateValuePair in listDatesValues:
+            date, value = dateValuePair
+            keyTuple = (county, state, date)
+            valueTuple = (attribute, value-avgForAttribute)
+            emitTuple = (keyTuple, [valueTuple])
+
+            finalEmitList.append(emitTuple)
+        
+        return finalEmitList
+
+
+
+# at end of this
+# key, value: key = (county, state, date) value = list((attribute, mean-centered-value))
+    climateRDD = climateRDD.reduceByKey(lambda a,b: (a[0]+b[0], a[1]+b[1]))\
+                    .map(emitCountyKeys)\
+                    .reduceByKey(lambda x,y: ( x[0]+y[0] ,  ( x[1][0]+y[1][0], x[1][1]+y[1][1]  ) ) )\
+                    .flatMap(emitMeanCenteredValues)\
+                    .reduceByKey(lambda x,y: x+y)
+    
+    pprint(climateRDD.take(1))
+    
